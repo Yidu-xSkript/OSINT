@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "globe",
+  "description": "Lets the loopback OSINT UI open God's Eye View in a native child window (avoids iframe X-Frame-Options). The only IPC granted to the remote page.",
+  "windows": ["main"],
+  "remote": {
+    "urls": ["http://localhost:*", "http://127.0.0.1:*"]
+  },
+  "permissions": [
+    "core:webview:allow-create-webview-window",
+    "core:webview:allow-webview-close"
+  ]
+}

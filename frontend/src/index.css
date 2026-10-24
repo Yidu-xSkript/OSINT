@@ -1,0 +1,8 @@
+@import "tailwindcss";
+
+html, body, #root { height: 100%; margin: 0; }
+body { background: #0f1115; color: #e4e6ea; font: 13px system-ui, sans-serif; }
+input, select, textarea, button { font: inherit; }
+.field { @apply w-full rounded border border-zinc-700 bg-zinc-900 px-2 py-1 outline-none focus:border-sky-500 disabled:opacity-60; }
+.btn { @apply rounded border border-zinc-700 bg-zinc-800 px-2.5 py-1 hover:border-sky-500 disabled:cursor-wait disabled:opacity-50; }
+.h { @apply mb-1.5 mt-3 text-[11px] font-semibold uppercase tracking-wider text-zinc-500; }

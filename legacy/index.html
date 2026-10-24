@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mini-Maltego</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+<style>
+  :root { --bg:#14161a; --panel:#1d2026; --line:#2c3038; --fg:#e4e6ea; --dim:#8b919c; --acc:#4f8cff; }
+  * { box-sizing:border-box; }
+  body { margin:0; height:100vh; display:grid; grid-template:auto 1fr auto / 240px 1fr 300px; background:var(--bg); color:var(--fg); font:13px system-ui,sans-serif; }
+  header { grid-column:1/-1; display:flex; gap:6px; align-items:center; padding:6px 10px; background:var(--panel); border-bottom:1px solid var(--line); }
+  header b { margin-right:auto; }
+  aside { background:var(--panel); padding:10px; overflow:auto; }
+  #left { border-right:1px solid var(--line); } #right { border-left:1px solid var(--line); }
+  #cy { min-height:0; }
+  footer { grid-column:1/-1; padding:4px 10px; background:var(--panel); border-top:1px solid var(--line); color:var(--dim); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  h3 { margin:12px 0 6px; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--dim); }
+  button, select, input { font:inherit; color:var(--fg); background:#262a31; border:1px solid var(--line); border-radius:4px; padding:5px 8px; }
+  button { cursor:pointer; } button:hover { border-color:var(--acc); } button:disabled { opacity:.5; cursor:wait; }
+  aside button, aside select, aside input { width:100%; margin-bottom:5px; text-align:left; }
+  .chip { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:6px; vertical-align:-1px; }
+  dl { margin:0; } dt { color:var(--dim); font-size:11px; margin-top:8px; } dd { margin:2px 0 0; word-break:break-all; }
+  #list div { padding:3px 0; cursor:pointer; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; } #list div:hover { color:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <b>Mini-Maltego</b>
+  <button id="layout">Re-layout</button>
+  <button id="save">Save graph</button>
+  <button id="load">Open graph</button>
+  <button id="clear">Clear</button>
+  <input type="file" id="file" accept=".json" hidden>
+</header>
+
+<aside id="left">
+  <h3>Add entity</h3>
+  <select id="etype"></select>
+  <input id="evalue" placeholder="e.g. example.com">
+  <button id="add">Add to graph</button>
+  <h3>Entities</h3>
+  <div id="list"></div>
+</aside>
+
+<div id="cy"></div>
+
+<aside id="right"><p style="color:var(--dim)">Select an entity. Shift/drag to multi-select, then run a transform on all of them. Delete key removes.</p></aside>
+
+<footer id="status">Ready.</footer>
+
+<script>
+const COLORS = { Domain:'#4f8cff', IP:'#f2a33a', URL:'#38c172', Email:'#e3577a', Username:'#a970ff',
+  Person:'#f5d547', Organization:'#2ec4c6', Location:'#ff7b54', AS:'#9aa3b0', Phrase:'#c9b18a' };
+const $ = id => document.getElementById(id);
+const status = t => $('status').textContent = t;
+let TRANSFORMS = {};
+
+const cy = cytoscape({ container:$('cy'), wheelSensitivity:0.3, style:[
+  { selector:'node', style:{ 'background-color':e => COLORS[e.data('type')] || '#888', label:'data(value)',
+    color:'#e4e6ea', 'font-size':10, 'text-valign':'bottom', 'text-margin-y':4, 'text-max-width':140,
+    'text-wrap':'ellipsis', width:26, height:26 } },
+  { selector:'node:selected', style:{ 'border-width':3, 'border-color':'#fff' } },
+  { selector:'edge', style:{ width:1, 'line-color':'#454b55', 'target-arrow-color':'#454b55',
+    'target-arrow-shape':'triangle', 'curve-style':'bezier', 'arrow-scale':0.7 } },
+]});
+
+// Same type+value = same node, like Maltego merges duplicate entities.
+const nid = (type, value) => `${type}|${value}`;
+function addNode(type, value, near) {
+  const id = nid(type, value);
+  if (cy.getElementById(id).empty()) {
+    const p = near ? { x:near.x + (Math.random()-.5)*200, y:near.y + (Math.random()-.5)*200 } : { x:0, y:0 };
+    cy.add({ data:{ id, type, value }, position:p });
+  }
+  return id;
+}
+
+async function runTransform(name, nodes) {
+  const btns = [...document.querySelectorAll('aside button')]; btns.forEach(b => b.disabled = true);
+  let added = 0, errs = [];
+  await Promise.all(nodes.map(async n => {
+    status(`Running "${name}" on ${nodes.length} entit${nodes.length > 1 ? 'ies' : 'y'}…`);
+    const r = await fetch('/', { method:'POST', body:JSON.stringify({ type:n.data('type'), value:n.data('value'), transform:name }) }).then(r => r.json());
+    if (r.error) return errs.push(`${n.data('value')}: ${r.error}`);
+    for (const { type, value } of r.results) {
+      const before = cy.nodes().length, id = addNode(type, value, n.position());
+      added += cy.nodes().length - before;
+      const eid = `${n.id()}->${id}`;
+      if (id !== n.id() && cy.getElementById(eid).empty()) cy.add({ data:{ id:eid, source:n.id(), target:id, transform:name } });
+    }
+  }));
+  btns.forEach(b => b.disabled = false);
+  if (added) relayout();
+  status(errs.length ? `Done, ${added} new. Errors: ${errs.join(' | ')}` : `"${name}" done: ${added} new entities.`);
+  refresh();
+}
+
+function relayout() { cy.layout({ name:'cose', animate:false, nodeRepulsion:9000, idealEdgeLength:90 }).run(); }
+
+function refresh() {
+  const sel = cy.nodes(':selected');
+  $('list').innerHTML = '';
+  cy.nodes().sort((a, b) => a.data('type').localeCompare(b.data('type'))).forEach(n => {
+    const d = document.createElement('div');
+    d.innerHTML = `<span class="chip" style="background:${COLORS[n.data('type')]}"></span>`;
+    d.append(n.data('value')); d.title = `${n.data('type')}: ${n.data('value')}`;
+    d.onclick = () => { cy.nodes().unselect(); n.select(); cy.center(n); };
+    $('list').append(d);
+  });
+
+  const R = $('right'); R.innerHTML = '';
+  if (!sel.length) return R.innerHTML = '<p style="color:var(--dim)">Select an entity. Shift/drag to multi-select, then run a transform on all of them. Delete key removes.</p>';
+  const types = [...new Set(sel.map(n => n.data('type')))];
+  if (sel.length === 1) {
+    const n = sel[0], dl = document.createElement('dl');
+    const rows = [['Type', n.data('type')], ['Value', n.data('value')],
+      ['Links in', n.incomers('edge').map(e => `${e.source().data('value')} (${e.data('transform')})`).join('\n') || '—'],
+      ['Links out', n.outgoers('node').length]];
+    for (const [k, v] of rows) { const dt = document.createElement('dt'), dd = document.createElement('dd'); dt.textContent = k; dd.textContent = v; dd.style.whiteSpace = 'pre-line'; dl.append(dt, dd); }
+    R.append(dl);
+  } else {
+    R.insertAdjacentHTML('beforeend', `<p>${sel.length} selected (${types.join(', ')})</p>`);
+  }
+  for (const t of types) {
+    const fns = TRANSFORMS[t]; if (!fns) continue;
+    const nodes = sel.filter(n => n.data('type') === t);
+    R.insertAdjacentHTML('beforeend', `<h3>${t} transforms</h3>`);
+    const all = document.createElement('button'); all.textContent = '▶ Run all'; R.append(all);
+    all.onclick = async () => { for (const f of fns) await runTransform(f, nodes.toArray()); };
+    for (const f of fns) { const b = document.createElement('button'); b.textContent = f; b.onclick = () => runTransform(f, nodes.toArray()); R.append(b); }
+  }
+  const del = document.createElement('button'); del.textContent = 'Delete selected'; del.style.marginTop = '12px';
+  del.onclick = () => { cy.remove(sel); refresh(); }; R.append(del);
+}
+
+cy.on('select unselect', () => setTimeout(refresh));
+document.addEventListener('keydown', e => {
+  if (e.key === 'Delete' && !['INPUT','SELECT'].includes(document.activeElement.tagName)) { cy.remove(cy.nodes(':selected')); refresh(); }
+});
+
+$('add').onclick = () => {
+  const v = $('evalue').value.trim(); if (!v) return;
+  const e = cy.extent(), id = addNode($('etype').value, v, { x:(e.x1 + e.x2)/2, y:(e.y1 + e.y2)/2 });
+  $('evalue').value = ''; cy.nodes().unselect(); cy.getElementById(id).select(); refresh();
+};
+$('evalue').onkeydown = e => e.key === 'Enter' && $('add').click();
+$('layout').onclick = relayout;
+$('clear').onclick = () => { if (confirm('Clear graph?')) { cy.elements().remove(); refresh(); } };
+$('save').onclick = () => {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(cy.json().elements)], { type:'application/json' }));
+  a.download = 'graph.json'; a.click();
+};
+$('load').onclick = () => $('file').click();
+$('file').onchange = async e => { cy.elements().remove(); cy.add(JSON.parse(await e.target.files[0].text())); cy.fit(); refresh(); e.target.value = ''; };
+
+fetch('/api/transforms').then(r => r.json()).then(t => {
+  TRANSFORMS = t;
+  $('etype').innerHTML = Object.keys(COLORS).map(k => `<option>${k}</option>`).join('');
+  status(`Ready. ${Object.values(t).flat().length} transforms loaded.`);
+});
+</script>
+</body>
+</html>
